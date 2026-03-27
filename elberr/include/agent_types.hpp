@@ -15,10 +15,11 @@ struct AgentGoal {
 };
 
 enum class DriveType {
-    CURIOSITY,      // want to learn new things
-    SOCIALITY,      // want to respond to chat
-    CONSERVATISM,   // want to think about what I know
-    RESTLESSNESS    // want to do something unexpected
+    CURIOSITY,        // want to learn new things
+    SOCIALITY,        // want to respond to chat
+    CONSERVATISM,     // want to think about what I know
+    RESTLESSNESS,     // want to do something unexpected
+    SELF_IMPROVEMENT  // want to understand and improve own code
 };
 
 struct Drive {
@@ -32,6 +33,7 @@ enum class ActionType {
     REASON,
     RESPOND_TO_CHAT,
     EXPLORE_CONCEPT,
+    SELF_MODIFY,     // read/analyze/patch own source code
     IDLE
 };
 

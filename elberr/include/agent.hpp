@@ -14,6 +14,7 @@
 #include "persistence.hpp"
 #include "will_engine.hpp"
 #include "chat_server.hpp"
+#include "code_engine.hpp"
 
 namespace elberr {
 
@@ -38,6 +39,7 @@ private:
     Persistence persistence_;
     WillEngine will_;
     ChatServer chat_;
+    CodeEngine code_;
 
     // Goals
     std::vector<AgentGoal> goals_;
@@ -67,6 +69,7 @@ private:
     void actReason();
     void actRespondToChat();
     void actExploreConcept();
+    void actSelfModify();
 
     // Goal management
     void seedGoals();

@@ -585,6 +585,8 @@ header h1 {
         <div id="goalList"></div>
         <h3>Drives</h3>
         <div id="driveList"></div>
+        <h3>Self-Modification</h3>
+        <div id="codeStats" style="font-size:0.8em;color:#888;"></div>
     </div>
     <div class="chat-area">
         <div id="messages"></div>
@@ -633,6 +635,15 @@ function updateStatus(s) {
 
     const dl = document.getElementById('driveList');
     dl.innerHTML = '';
+    // Code stats
+    const cs = document.getElementById('codeStats');
+    if (s.codeFiles !== undefined) {
+        cs.innerHTML = '<div>Source files: <span style="color:#00d4ff">' + (s.codeFiles||0) + '</span></div>' +
+            '<div>Functions: <span style="color:#00d4ff">' + (s.codeFunctions||0) + '</span></div>' +
+            '<div>Patches applied: <span style="color:#4caf50">' + (s.codePatches||0) + '</span>' +
+            ' / failed: <span style="color:#ff5252">' + (s.codeFailedPatches||0) + '</span></div>';
+    }
+
     (s.drives || []).forEach(d => {
         const label = document.createElement('div');
         label.style.cssText = 'display:flex;justify-content:space-between;font-size:0.8em;color:#888';

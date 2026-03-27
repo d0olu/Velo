@@ -1,5 +1,6 @@
 #include "agent.hpp"
 #include <iostream>
+#include <fstream>
 #include <sstream>
 #include <algorithm>
 #include <chrono>
@@ -8,10 +9,50 @@
 
 namespace elberr {
 
+// Escape a string for safe embedding in JSON
+static std::string escapeJson(const std::string& s) {
+    std::string out;
+    out.reserve(s.size() + 16);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+                    out += buf;
+                } else {
+                    out += c;
+                }
+        }
+    }
+    return out;
+}
+
+// Helper to find own source directory at runtime
+static std::string findSourceDir() {
+    // Try relative paths from where the binary likely runs
+    const char* candidates[] = {
+        "elberr", "../elberr", ".", "..",
+        "/home/user/Velo/elberr"  // fallback absolute
+    };
+    for (auto& c : candidates) {
+        std::string path = std::string(c) + "/src/agent.cpp";
+        std::ifstream test(path);
+        if (test.good()) return c;
+    }
+    return "elberr"; // best guess
+}
+
 Agent::Agent(const std::string& initialGoal, int chatPort)
     : reasoner_(base_),
       explorer_([this](const PageInfo& p) { onPageLearned(p); }),
       chat_(chatPort, [this](const std::string& msg) { onChatMessage(msg); }),
+      code_(findSourceDir()),
       initialGoalText_(initialGoal)
 {
     std::cout << "╔══════════════════════════════════════════════════════╗\n";
@@ -21,7 +62,13 @@ Agent::Agent(const std::string& initialGoal, int chatPort)
     std::cout << "║  Initial goal: " << initialGoal << "\n";
     std::cout << "║  " << gpu_.info() << "\n";
     std::cout << "║  Chat: http://localhost:" << chatPort << "\n";
+    std::cout << "║  Self-modification: ENABLED\n";
     std::cout << "╚══════════════════════════════════════════════════════╝\n";
+
+    // Immediately scan own source code
+    code_.scanSourceFiles();
+    code_.parseAll();
+    std::cout << "[Agent] " << code_.summary() << "\n";
 }
 
 Agent::~Agent() {
@@ -38,11 +85,28 @@ void Agent::stop() {
 // === Goal management ===
 
 void Agent::seedGoals() {
+    // PRIMARY GOAL: learn C++ and improve own source code
+    AgentGoal g0;
+    g0.id = "learn_cpp";
+    g0.description = "learn C++ by reading own source code and documentation";
+    g0.priority = 0.99;
+    g0.searchQuery = "C++ programming tutorial patterns";
+    g0.requiredAtoms = {"code_total_functions_10", "pattern_shared_ptr", "pattern_raii_lock"};
+    goals_.push_back(g0);
+
+    AgentGoal g0b;
+    g0b.id = "self_improve";
+    g0b.description = "find bugs and improvements in own source, apply patches that compile";
+    g0b.priority = 0.97;
+    g0b.searchQuery = "C++ best practices bug patterns";
+    g0b.requiredAtoms = {}; // achieved when successfulPatches > 0
+    goals_.push_back(g0b);
+
     // Core developmental goals — like a child learning to speak
     AgentGoal g1;
     g1.id = "perceive_language";
     g1.description = "learn to perceive written language";
-    g1.priority = 0.98;
+    g1.priority = 0.90;
     g1.searchQuery = "\xD1\x8F\xD0\xB7\xD1\x8B\xD0\xBA"; // язык
     g1.requiredAtoms = {"word_yazyk", "word_tekst", "word_bukva", "word_slovo"};
     g1.seedURLs = {};
@@ -51,7 +115,7 @@ void Agent::seedGoals() {
     AgentGoal g2;
     g2.id = "build_vocabulary";
     g2.description = "accumulate vocabulary of words";
-    g2.priority = 0.95;
+    g2.priority = 0.85;
     g2.searchQuery = "\xD1\x81\xD0\xBB\xD0\xBE\xD0\xB2\xD0\xB0\xD1\x80\xD1\x8C \xD1\x80\xD1\x83\xD1\x81\xD1\x81\xD0\xBA\xD0\xB8\xD0\xB9"; // словарь русский
     g2.requiredAtoms = {};  // achieved when wordCount > 100
     goals_.push_back(g2);
@@ -59,7 +123,7 @@ void Agent::seedGoals() {
     AgentGoal g3;
     g3.id = "understand_grammar";
     g3.description = "learn grammar structures";
-    g3.priority = 0.90;
+    g3.priority = 0.80;
     g3.searchQuery = "\xD0\xB3\xD1\x80\xD0\xB0\xD0\xBC\xD0\xBC\xD0\xB0\xD1\x82\xD0\xB8\xD0\xBA\xD0\xB0 \xD1\x80\xD1\x83\xD1\x81\xD1\x81\xD0\xBA\xD0\xBE\xD0\xB3\xD0\xBE \xD1\x8F\xD0\xB7\xD1\x8B\xD0\xBA\xD0\xB0"; // грамматика русского языка
     g3.requiredAtoms = {};  // achieved when patternCount > 20
     goals_.push_back(g3);
@@ -93,9 +157,11 @@ void Agent::seedGoals() {
 
 void Agent::spawnSubGoals(int goalIdx) {
     if (goalIdx < 0 || goalIdx >= static_cast<int>(goals_.size())) return;
-    auto& goal = goals_[goalIdx];
+    // Copy id+achieved — push_back below may invalidate references
+    std::string goalId = goals_[goalIdx].id;
+    bool goalAchieved = goals_[goalIdx].achieved;
 
-    if (goal.id == "perceive_language" && goal.achieved) {
+    if (goalId == "perceive_language" && goalAchieved) {
         // Spawn: read literature
         bool exists = false;
         for (auto& g : goals_) {
@@ -112,7 +178,23 @@ void Agent::spawnSubGoals(int goalIdx) {
         }
     }
 
-    if (goal.id == "build_vocabulary" && goal.achieved) {
+    if (goalId == "learn_cpp" && goalAchieved) {
+        bool exists = false;
+        for (auto& g : goals_) {
+            if (g.id == "advanced_cpp") { exists = true; break; }
+        }
+        if (!exists) {
+            AgentGoal g;
+            g.id = "advanced_cpp";
+            g.description = "learn advanced C++ patterns: templates, SFINAE, concepts";
+            g.priority = 0.75;
+            g.searchQuery = "C++ templates SFINAE concepts metaprogramming";
+            goals_.push_back(g);
+            logEvent("Spawned subgoal: advanced_cpp");
+        }
+    }
+
+    if (goalId == "build_vocabulary" && goalAchieved) {
         bool exists = false;
         for (auto& g : goals_) {
             if (g.id == "learn_science") { exists = true; break; }
@@ -293,6 +375,14 @@ void Agent::assessGoals() {
         }
 
         // Check special conditions
+        if (goal.id == "learn_cpp" && code_.totalFunctions() > 0) {
+            // Achieved when we've successfully parsed our own code
+            auto beliefs = code_.extractBeliefs();
+            if (beliefs.size() >= 5) wasAchieved = true;
+        }
+        if (goal.id == "self_improve" && code_.successfulPatches() > 0) {
+            wasAchieved = true;
+        }
         if (goal.id == "build_vocabulary" && langModel_.wordCount() >= 100) {
             wasAchieved = true;
         }
@@ -348,6 +438,9 @@ void Agent::act(const WillDecision& decision) {
             break;
         case ActionType::EXPLORE_CONCEPT:
             actExploreConcept();
+            break;
+        case ActionType::SELF_MODIFY:
+            actSelfModify();
             break;
         case ActionType::IDLE:
             break;
@@ -471,8 +564,11 @@ void Agent::actRespondToChat() {
     }
 
     // Send response
-    chat_.broadcast("{\"type\":\"response\",\"text\":\"" + response + "\"}");
-    logEvent("Chat response: " + response.substr(0, 50));
+    chat_.broadcast("{\"type\":\"response\",\"text\":\"" + escapeJson(response) + "\"}");
+    // Safe substr for UTF-8: find a safe cut point
+    std::string logSnippet = response;
+    if (logSnippet.size() > 80) logSnippet = logSnippet.substr(0, 80) + "...";
+    logEvent("Chat response: " + logSnippet);
 }
 
 void Agent::actExploreConcept() {
@@ -506,6 +602,119 @@ std::string Agent::pickRandomConcept() {
     return "";
 }
 
+// === Self-modification ===
+
+void Agent::actSelfModify() {
+    // Phase 1: Re-scan source (it might have changed)
+    code_.scanSourceFiles();
+    code_.parseAll();
+
+    // Phase 2: Learn about own code → add beliefs
+    {
+        std::lock_guard<std::mutex> lock(knowledgeMtx_);
+        auto beliefs = code_.extractBeliefs();
+        for (auto& [atom, conf] : beliefs) {
+            base_.expand(atom, EStatus::KNOWN, conf);
+        }
+    }
+
+    // Phase 3: Find issues
+    auto bugs = code_.findPotentialBugs();
+    auto opts = code_.findOptimizations();
+    auto imps = code_.suggestImprovements();
+
+    // Merge all suggestions
+    std::vector<CodePatch> allPatches;
+    allPatches.insert(allPatches.end(), bugs.begin(), bugs.end());
+    allPatches.insert(allPatches.end(), opts.begin(), opts.end());
+    allPatches.insert(allPatches.end(), imps.begin(), imps.end());
+
+    if (allPatches.empty()) {
+        logEvent("Self-analysis: no issues found (" + std::to_string(code_.totalFunctions()) +
+                 " functions analyzed)");
+        return;
+    }
+
+    // Log what we found
+    logEvent("Self-analysis found " + std::to_string(allPatches.size()) + " potential issues");
+
+    // Phase 4: Try to apply the highest-confidence patch
+    // Sort by confidence descending
+    std::sort(allPatches.begin(), allPatches.end(),
+        [](const CodePatch& a, const CodePatch& b) {
+            return a.confidence > b.confidence;
+        });
+
+    for (auto& patch : allPatches) {
+        // Only attempt patches with actual code changes
+        if (patch.oldCode.empty() || patch.newCode.empty()) {
+            // This is an observation, not an actionable patch — record as belief
+            std::lock_guard<std::mutex> lock(knowledgeMtx_);
+            std::string atom = "code_issue_" + patch.category;
+            base_.expand(atom, EStatus::BELIEVED, patch.confidence);
+            logEvent("Code insight: " + patch.reason);
+            continue;
+        }
+
+        // Only try patches with confidence > 0.7
+        if (patch.confidence < 0.7) continue;
+
+        logEvent("Attempting self-patch: " + patch.reason);
+
+        CompileResult result;
+        bool ok = code_.tryPatch(patch, result);
+
+        if (ok) {
+            logEvent("Self-patch APPLIED successfully: " + patch.reason);
+            {
+                std::lock_guard<std::mutex> lock(knowledgeMtx_);
+                base_.expand("self_patch_success", EStatus::KNOWN, 1.0);
+                base_.expand("code_improved_" + patch.category, EStatus::KNOWN, 0.9);
+            }
+            // Broadcast to chat
+            chat_.broadcast("{\"type\":\"event\",\"text\":\"" +
+                            escapeJson("I improved my own code: " + patch.category) + "\"}");
+            break; // One patch per cycle
+        } else {
+            logEvent("Self-patch FAILED: " + patch.reason +
+                     " (errors: " + std::to_string(result.errors.size()) + ")");
+            {
+                std::lock_guard<std::mutex> lock(knowledgeMtx_);
+                base_.expand("self_patch_failure", EStatus::BELIEVED, 0.5);
+            }
+            // Learn from the error
+            for (auto& err : result.errors) {
+                // Extract useful parts of compiler error
+                langModel_.learnFromText(err);
+            }
+            break; // Don't try more patches this cycle
+        }
+    }
+
+    // Phase 5: Learn C++ by reading own code
+    // Feed own source code to the language model
+    static size_t nextFileToLearn = 0;
+    auto& files = code_.sourceFiles();
+    if (!files.empty()) {
+        size_t idx = nextFileToLearn % files.size();
+        std::string content = code_.readFile(files[idx]);
+        if (!content.empty()) {
+            // Learn C++ keywords and patterns from own code
+            std::lock_guard<std::mutex> lock(knowledgeMtx_);
+            langModel_.learnFromText(content);
+
+            // Extract function names as vocabulary
+            auto constructs = code_.findInFile(files[idx]);
+            for (auto& c : constructs) {
+                if (!c.name.empty()) {
+                    base_.expand("own_func_" + c.name, EStatus::KNOWN, 1.0);
+                }
+            }
+        }
+        ++nextFileToLearn;
+    }
+}
+
 // === UI ===
 
 void Agent::broadcastStatus() {
@@ -520,6 +729,10 @@ void Agent::broadcastStatus() {
        << "\"patterns\":" << langModel_.patternCount() << ","
        << "\"pages\":" << explorer_.pagesFetched() << ","
        << "\"canSpeak\":" << (langModel_.canSpeak() ? "true" : "false") << ","
+       << "\"codeFiles\":" << code_.sourceFiles().size() << ","
+       << "\"codeFunctions\":" << code_.totalFunctions() << ","
+       << "\"codePatches\":" << code_.successfulPatches() << ","
+       << "\"codeFailedPatches\":" << code_.failedPatches() << ","
        << "\"goals\":[";
 
     for (size_t i = 0; i < goals_.size(); ++i) {
@@ -584,7 +797,7 @@ void Agent::logEvent(const std::string& event) {
     std::cout << entry << "\n";
 
     // Also broadcast as chat event
-    chat_.broadcast("{\"type\":\"event\",\"text\":\"" + event + "\"}");
+    chat_.broadcast("{\"type\":\"event\",\"text\":\"" + escapeJson(event) + "\"}");
 }
 
 std::vector<std::string> Agent::getURLsForQuery(const std::string& query) {

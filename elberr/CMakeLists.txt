@@ -22,6 +22,7 @@ set(ELBERR_SOURCES
     src/gpu_engine.cpp
     src/persistence.cpp
     src/will_engine.cpp
+    src/code_engine.cpp
     src/agent.cpp
     src/chat_server.cpp
     src/elberr.cpp

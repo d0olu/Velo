@@ -13,6 +13,7 @@ const char* Drive::name() const {
         case DriveType::SOCIALITY: return "sociality";
         case DriveType::CONSERVATISM: return "conservatism";
         case DriveType::RESTLESSNESS: return "restlessness";
+        case DriveType::SELF_IMPROVEMENT: return "self_improvement";
     }
     return "?";
 }
@@ -25,6 +26,7 @@ WillEngine::WillEngine() {
     drives_.push_back({DriveType::SOCIALITY, 0.20});
     drives_.push_back({DriveType::CONSERVATISM, 0.15});
     drives_.push_back({DriveType::RESTLESSNESS, 0.05});
+    drives_.push_back({DriveType::SELF_IMPROVEMENT, 0.60});
 }
 
 void WillEngine::update(size_t beliefCount, size_t wordCount, bool hasChatMessage,
@@ -58,6 +60,18 @@ void WillEngine::update(size_t beliefCount, size_t wordCount, bool hasChatMessag
                 // Higher when doing same thing repeatedly
                 if (cyclesSinceLastLearn > 20 && cyclesSinceLastChat > 20) {
                     d.intensity += 0.01;
+                }
+                break;
+
+            case DriveType::SELF_IMPROVEMENT:
+                // Grows steadily — the agent always wants to improve itself
+                d.intensity += 0.004;
+                // Stronger when knowledge base is large (has context to reason about code)
+                if (beliefCount > 50) d.intensity += 0.002;
+                if (wordCount > 200) d.intensity += 0.001;
+                // Spikes when idle for a while
+                if (cyclesSinceLastLearn > 30 && cyclesSinceLastChat > 10) {
+                    d.intensity += 0.02;
                 }
                 break;
         }
@@ -134,6 +148,12 @@ WillDecision WillEngine::decide(bool hasActiveGoal, bool hasChatMessage) {
             decision.reason = "restless -> explore something new";
             decision.spontaneous = true;
             break;
+
+        case DriveType::SELF_IMPROVEMENT:
+            decision.action = ActionType::SELF_MODIFY;
+            decision.reason = "introspection -> analyze and improve own code";
+            decision.spontaneous = true;
+            break;
     }
 
     // Override: always respond to chat if message present (politeness)
@@ -170,6 +190,12 @@ void WillEngine::onActionDone(ActionType action) {
             for (auto& d : drives_) {
                 if (d.type == DriveType::RESTLESSNESS) d.intensity *= 0.2;
                 if (d.type == DriveType::CURIOSITY) d.intensity *= 0.8;
+            }
+            break;
+        case ActionType::SELF_MODIFY:
+            for (auto& d : drives_) {
+                if (d.type == DriveType::SELF_IMPROVEMENT) d.intensity *= 0.5;
+                if (d.type == DriveType::CURIOSITY) d.intensity *= 0.9;
             }
             break;
         case ActionType::IDLE:
